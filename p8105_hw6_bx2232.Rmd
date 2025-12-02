@@ -1,0 +1,333 @@
+---
+title: "Homework 6"
+author: "Bowen Xia (bx2232)"
+date: "`2025-12-01`"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(tidyverse)
+library(modelr)
+library(broom)
+
+# Set theme for all plots
+theme_set(theme_minimal() + theme(legend.position = "bottom"))
+```
+
+## Problem 1: Homicide Data Analysis
+
+### Data Import and Cleaning
+
+First, we'll load and clean the homicide data:
+
+```{r load_homicide_data}
+# Read homicide data from Washington Post GitHub repository
+homicide_df = read_csv("https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv") %>%
+  mutate(
+    city_state = str_c(city, ", ", state),
+    resolved = case_when(
+      disposition == "Closed by arrest" ~ 1,
+      disposition == "Closed without arrest" ~ 0,
+      disposition == "Open/No arrest" ~ 0
+    ),
+    victim_age = as.numeric(victim_age)
+  ) %>%
+  filter(!city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")) %>%
+  filter(victim_race %in% c("White", "Black"))
+
+# Display summary
+homicide_df %>%
+  dplyr::select(city_state, resolved, victim_age, victim_sex, victim_race) %>%
+  head()
+```
+
+### Baltimore, MD Logistic Regression
+
+Fit a logistic regression model for Baltimore, MD:
+
+```{r baltimore_glm}
+# Filter for Baltimore
+baltimore_df = homicide_df %>%
+  filter(city_state == "Baltimore, MD")
+
+# Fit logistic regression
+baltimore_glm = glm(
+  resolved ~ victim_age + victim_sex + victim_race,
+  data = baltimore_df,
+  family = binomial()
+)
+
+# Tidy results and calculate odds ratios with confidence intervals
+baltimore_results = baltimore_glm %>%
+  broom::tidy() %>%
+  mutate(
+    OR = exp(estimate),
+    CI_lower = exp(estimate - 1.96 * std.error),
+    CI_upper = exp(estimate + 1.96 * std.error)
+  ) %>%
+  dplyr::select(term, log_OR = estimate, OR, CI_lower, CI_upper, p.value) %>%
+  filter(term == "victim_sexMale")
+
+baltimore_results %>%
+  knitr::kable(digits = 3)
+```
+
+**Interpretation:** For homicides in Baltimore, MD, the adjusted odds of solving homicides for male victims is `r round(baltimore_results$OR, 3)` times the odds for female victims (95% CI: `r round(baltimore_results$CI_lower, 3)`, `r round(baltimore_results$CI_upper, 3)`), holding all other variables fixed. This suggests that homicides with male victims are significantly less likely to be solved compared to homicides with female victims.
+
+### All Cities Analysis
+
+Now we'll run the logistic regression for each city:
+
+```{r all_cities_glm}
+# Function to run glm for each city
+city_glm = function(df) {
+  glm(resolved ~ victim_age + victim_sex + victim_race,
+      data = df,
+      family = binomial()) %>%
+    broom::tidy() %>%
+    mutate(
+      OR = exp(estimate),
+      CI_lower = exp(estimate - 1.96 * std.error),
+      CI_upper = exp(estimate + 1.96 * std.error)
+    ) %>%
+    filter(term == "victim_sexMale") %>%
+    dplyr::select(term, OR, CI_lower, CI_upper)
+}
+
+# Apply to all cities
+all_cities_results = homicide_df %>%
+  nest(data = -city_state) %>%
+  mutate(
+    models = map(data, city_glm)
+  ) %>%
+  dplyr::select(-data) %>%
+  unnest(models)
+
+all_cities_results %>%
+  head(10) %>%
+  knitr::kable(digits = 3)
+```
+
+### Visualization of Odds Ratios
+
+```{r or_plot, fig.width=10, fig.height=8}
+all_cities_results %>%
+  mutate(city_state = fct_reorder(city_state, OR)) %>%
+  ggplot(aes(x = city_state, y = OR)) +
+  geom_point() +
+  geom_errorbar(aes(ymin = CI_lower, ymax = CI_upper)) +
+  geom_hline(yintercept = 1, linetype = "dashed", color = "red") +
+  coord_flip() +
+  labs(
+    title = "Adjusted Odds Ratios for Solving Homicides: Male vs Female Victims",
+    subtitle = "By City",
+    x = "City, State",
+    y = "Odds Ratio (95% CI)",
+    caption = "OR < 1 indicates lower odds of solving homicides for male victims"
+  ) +
+  theme(axis.text.y = element_text(size = 8))
+```
+
+**Comments on the plot:**
+
+* Almost all cities have odds ratios below 1, indicating that homicides with male victims are generally less likely to be solved than those with female victims across the United States.
+* New York, NY has the lowest odds ratio (around 0.26), meaning male victim homicides are much less likely to be solved compared to female victim homicides.
+* Albuquerque, NM has the highest odds ratio (around 1.77), being one of the few cities where male victim homicides are more likely to be solved.
+* The confidence intervals for most cities do not include 1.0, suggesting statistically significant differences between male and female victim homicide resolution rates.
+* There's considerable variation across cities, suggesting local factors (policing, demographics, resources) play important roles in homicide resolution.
+
+---
+
+## Problem 3: Birthweight Analysis
+
+### Data Loading and Cleaning
+
+```{r load_birthweight}
+# Load birthweight data
+birthweight_df = read_csv("birthweight.csv") %>%
+  mutate(
+    babysex = factor(babysex, levels = c(1, 2), labels = c("Male", "Female")),
+    frace = factor(frace, levels = c(1, 2, 3, 4, 8, 9),
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other", "Unknown")),
+    mrace = factor(mrace, levels = c(1, 2, 3, 4, 8),
+                   labels = c("White", "Black", "Asian", "Puerto Rican", "Other")),
+    malform = factor(malform, levels = c(0, 1), labels = c("Absent", "Present"))
+  )
+
+# Check for missing data
+sum(is.na(birthweight_df))
+
+# Display summary statistics
+birthweight_df %>%
+  dplyr::select(bwt, bhead, blength, gaweeks, delwt, wtgain) %>%
+  summary()
+```
+
+There are no missing values in the dataset.
+
+### Proposed Regression Model
+
+**Modeling Process:**
+
+I'll propose a model based on a combination of clinical knowledge and data-driven selection. Research suggests that birthweight is influenced by:
+
+1. **Biological factors**: Baby's head circumference and length (strong proximal indicators)
+2. **Gestational factors**: Gestational age in weeks
+3. **Maternal health**: Mother's weight gain during pregnancy, pre-pregnancy BMI
+4. **Behavioral factors**: Smoking during pregnancy
+
+Let me start with a full model including these factors and use stepwise selection:
+
+```{r model_building}
+# Fit full model with hypothesized predictors
+full_model = lm(bwt ~ bhead + blength + gaweeks + wtgain + ppbmi + smoken + 
+                  babysex + mrace, data = birthweight_df)
+
+# Perform backward selection based on AIC
+step_model = MASS::stepAIC(full_model, direction = "backward", trace = FALSE)
+
+# My proposed model (from stepwise selection)
+my_model = lm(bwt ~ bhead + blength + gaweeks + wtgain + smoken + babysex + mrace,
+              data = birthweight_df)
+
+# Display model summary
+summary(my_model)
+```
+
+**Model Description:**
+
+My final model includes:
+
+* `bhead`: Baby's head circumference (strong biological predictor)
+* `blength`: Baby's length at birth (strong biological predictor)
+* `gaweeks`: Gestational age (crucial developmental timeline)
+* `wtgain`: Mother's weight gain during pregnancy (nutritional indicator)
+* `smoken`: Average cigarettes smoked per day (behavioral risk factor)
+* `babysex`: Baby's sex (known to affect birthweight)
+* `mrace`: Mother's race (proxy for various social determinants)
+
+All predictors are statistically significant (p < 0.05), and the model explains approximately 71% of the variance in birthweight (R² = 0.71).
+
+### Residual Plot
+
+```{r residual_plot, fig.width=10, fig.height=6}
+birthweight_df %>%
+  add_predictions(my_model) %>%
+  add_residuals(my_model) %>%
+  ggplot(aes(x = pred, y = resid)) +
+  geom_point(alpha = 0.3) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "red") +
+  geom_smooth(se = FALSE, color = "blue") +
+  labs(
+    title = "Residuals vs Fitted Values",
+    x = "Fitted Values (grams)",
+    y = "Residuals",
+    caption = "Blue line represents smoothed trend"
+  )
+```
+
+**Residual Plot Interpretation:**
+
+* The residuals are roughly centered around zero with no strong systematic patterns.
+* There's relatively constant variance across the range of fitted values (homoscedasticity).
+* A few outliers exist, particularly at lower predicted birthweights.
+* The smooth line stays close to zero, suggesting the linear model is appropriate.
+
+### Model Comparison
+
+Let's compare my model with two alternatives:
+
+```{r comparison_models}
+# Model 1: Length and gestational age only (main effects)
+model_1 = lm(bwt ~ blength + gaweeks, data = birthweight_df)
+
+# Model 2: Head circumference, length, sex, and all interactions
+model_2 = lm(bwt ~ bhead * blength * babysex, data = birthweight_df)
+
+# Display summaries
+summary(model_1)
+summary(model_2)
+```
+
+### Cross-Validation Comparison
+
+```{r cv_comparison}
+# Set seed for reproducibility
+set.seed(123)
+
+# Create cross-validation data
+cv_df = crossv_mc(birthweight_df, 100)
+
+# Function to compute RMSE
+rmse_calc = function(model, data) {
+  sqrt(mean((data$bwt - predict(model, data))^2))
+}
+
+# Fit models and calculate RMSE for each fold
+cv_results = cv_df %>%
+  mutate(
+    my_model = map(train, ~lm(bwt ~ bhead + blength + gaweeks + wtgain + 
+                                smoken + babysex + mrace, data = .x)),
+    model_1 = map(train, ~lm(bwt ~ blength + gaweeks, data = .x)),
+    model_2 = map(train, ~lm(bwt ~ bhead * blength * babysex, data = .x))
+  ) %>%
+  mutate(
+    rmse_my_model = map2_dbl(my_model, test, ~rmse_calc(.x, as_tibble(.y))),
+    rmse_model_1 = map2_dbl(model_1, test, ~rmse_calc(.x, as_tibble(.y))),
+    rmse_model_2 = map2_dbl(model_2, test, ~rmse_calc(.x, as_tibble(.y)))
+  )
+
+# Summarize RMSE values
+cv_summary = cv_results %>%
+  dplyr::select(starts_with("rmse")) %>%
+  pivot_longer(everything(),
+               names_to = "model",
+               values_to = "rmse",
+               names_prefix = "rmse_") %>%
+  group_by(model) %>%
+  summarize(
+    mean_rmse = mean(rmse),
+    sd_rmse = sd(rmse)
+  )
+
+cv_summary %>%
+  knitr::kable(digits = 2)
+```
+
+### Visualization of Cross-Validation Results
+
+```{r cv_plot, fig.width=10, fig.height=6}
+cv_results %>%
+  dplyr::select(starts_with("rmse")) %>%
+  pivot_longer(everything(),
+               names_to = "model",
+               values_to = "rmse",
+               names_prefix = "rmse_") %>%
+  mutate(model = recode(model,
+                        "my_model" = "My Model (7 predictors)",
+                        "model_1" = "Model 1 (length + gaweeks)",
+                        "model_2" = "Model 2 (interactions)")) %>%
+  ggplot(aes(x = model, y = rmse, fill = model)) +
+  geom_violin(alpha = 0.5) +
+  geom_boxplot(width = 0.3, alpha = 0.7) +
+  labs(
+    title = "Cross-Validation RMSE Comparison",
+    subtitle = "Lower RMSE indicates better predictive performance",
+    x = "Model",
+    y = "RMSE (grams)"
+  ) +
+  theme(legend.position = "none")
+```
+
+**Comparison Results:**
+
+* **My Model** (mean RMSE ≈ 273): Best overall performance with the lowest prediction error. This model balances complexity and predictive power well.
+
+* **Model 1** (mean RMSE ≈ 333): Significantly worse performance. Using only length and gestational age omits important predictors like head circumference and maternal factors.
+
+* **Model 2** (mean RMSE ≈ 288): Moderate performance. While the interaction model captures some complex relationships, it has more parameters but doesn't perform as well as my more parsimonious model.
+
+**Conclusion:** My proposed model achieves the best cross-validated prediction error, suggesting it generalizes well to new data. The inclusion of multiple clinically relevant predictors (biological, gestational, and maternal factors) provides better predictive accuracy than simpler or more complex alternatives.
+
+---
